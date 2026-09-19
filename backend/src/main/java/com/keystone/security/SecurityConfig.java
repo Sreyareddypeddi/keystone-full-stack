@@ -40,10 +40,18 @@ public class SecurityConfig {
     @Value("${app.frontend-url:http://localhost:5173}")
     private String frontendUrl;
 
+    // =========================================================
+    // PASSWORD ENCODER
+    // =========================================================
+
     @Bean
     PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
+
+    // =========================================================
+    // SECURITY FILTER CHAIN
+    // =========================================================
 
     @Bean
     SecurityFilterChain filterChain(
@@ -54,8 +62,10 @@ public class SecurityConfig {
         http
             .csrf(c -> c.disable())
 
+            // Enable CORS using the configuration below
             .cors(c -> c.configurationSource(cors()))
 
+            // JWT based authentication - no server session
             .sessionManagement(s ->
                 s.sessionCreationPolicy(
                     SessionCreationPolicy.STATELESS
@@ -63,16 +73,35 @@ public class SecurityConfig {
             )
 
             .authorizeHttpRequests(a ->
-                a.requestMatchers(
-                    "/api/auth/**",
-                    "/swagger-ui/**",
-                    "/swagger-ui.html",
-                    "/v3/api-docs/**"
-                ).permitAll()
+                a
+                    // -------------------------------------------------
+                    // OPTIONS / CORS PREFLIGHT
+                    // -------------------------------------------------
+                    .requestMatchers(
+                        org.springframework.http.HttpMethod.OPTIONS,
+                        "/**"
+                    )
+                    .permitAll()
 
-                .anyRequest().authenticated()
+                    // -------------------------------------------------
+                    // PUBLIC ENDPOINTS
+                    // -------------------------------------------------
+                    .requestMatchers(
+                        "/api/auth/**",
+                        "/swagger-ui/**",
+                        "/swagger-ui.html",
+                        "/v3/api-docs/**"
+                    )
+                    .permitAll()
+
+                    // -------------------------------------------------
+                    // EVERYTHING ELSE REQUIRES LOGIN
+                    // -------------------------------------------------
+                    .anyRequest()
+                    .authenticated()
             )
 
+            // JWT filter runs before Spring's username/password filter
             .addFilterBefore(
                 filter,
                 UsernamePasswordAuthenticationFilter.class
@@ -80,6 +109,10 @@ public class SecurityConfig {
 
         return http.build();
     }
+
+    // =========================================================
+    // CORS CONFIGURATION
+    // =========================================================
 
     @Bean
     CorsConfigurationSource cors() {
@@ -90,7 +123,10 @@ public class SecurityConfig {
         List<String> allowedOrigins =
                 new ArrayList<>();
 
-        // Local development
+        // ---------------------------------------------------------
+        // LOCAL FRONTEND
+        // ---------------------------------------------------------
+
         allowedOrigins.add(
                 "http://localhost:5173"
         );
@@ -99,7 +135,10 @@ public class SecurityConfig {
                 "http://localhost:3000"
         );
 
-        // Production Vercel frontend
+        // ---------------------------------------------------------
+        // DEPLOYED VERCEL FRONTEND
+        // ---------------------------------------------------------
+
         if (frontendUrl != null &&
                 !frontendUrl.isBlank()) {
 
@@ -112,6 +151,10 @@ public class SecurityConfig {
                 allowedOrigins
         );
 
+        // ---------------------------------------------------------
+        // ALLOWED HTTP METHODS
+        // ---------------------------------------------------------
+
         config.setAllowedMethods(
                 List.of(
                     "GET",
@@ -123,11 +166,23 @@ public class SecurityConfig {
                 )
         );
 
+        // ---------------------------------------------------------
+        // ALLOWED HEADERS
+        // ---------------------------------------------------------
+
         config.setAllowedHeaders(
                 List.of("*")
         );
 
+        // ---------------------------------------------------------
+        // CREDENTIALS
+        // ---------------------------------------------------------
+
         config.setAllowCredentials(true);
+
+        // ---------------------------------------------------------
+        // REGISTER CORS FOR ALL ENDPOINTS
+        // ---------------------------------------------------------
 
         UrlBasedCorsConfigurationSource source =
                 new UrlBasedCorsConfigurationSource();
@@ -141,6 +196,10 @@ public class SecurityConfig {
     }
 }
 
+
+// =============================================================
+// JWT FILTER
+// =============================================================
 
 @Component
 class JwtFilter extends OncePerRequestFilter {
@@ -166,52 +225,68 @@ class JwtFilter extends OncePerRequestFilter {
         String header =
                 request.getHeader("Authorization");
 
+        // ---------------------------------------------------------
+        // If Authorization header contains a Bearer token
+        // ---------------------------------------------------------
+
         if (header != null &&
                 header.startsWith("Bearer ")) {
 
             String token =
                     header.substring(7);
 
+            // -----------------------------------------------------
+            // Validate token
+            // -----------------------------------------------------
+
             if (jwt.valid(token)) {
 
                 String email =
                         jwt.extractEmail(token);
 
+                // -------------------------------------------------
+                // Find authenticated user
+                // -------------------------------------------------
+
                 users.findByEmail(email)
                         .ifPresent(user -> {
 
-                    var authority =
-                            new org.springframework
+                            var authority =
+                                    new org.springframework
+                                        .security
+                                        .core
+                                        .authority
+                                        .SimpleGrantedAuthority(
+                                            "ROLE_" +
+                                            user.getRole()
+                                        );
+
+                            var authentication =
+                                    new org.springframework
+                                        .security
+                                        .authentication
+                                        .UsernamePasswordAuthenticationToken(
+                                            user.getEmail(),
+                                            null,
+                                            List.of(authority)
+                                        );
+
+                            org.springframework
                                 .security
                                 .core
-                                .authority
-                                .SimpleGrantedAuthority(
-                                    "ROLE_" +
-                                    user.getRole()
+                                .context
+                                .SecurityContextHolder
+                                .getContext()
+                                .setAuthentication(
+                                    authentication
                                 );
-
-                    var authentication =
-                            new org.springframework
-                                .security
-                                .authentication
-                                .UsernamePasswordAuthenticationToken(
-                                    user.getEmail(),
-                                    null,
-                                    List.of(authority)
-                                );
-
-                    org.springframework
-                        .security
-                        .core
-                        .context
-                        .SecurityContextHolder
-                        .getContext()
-                        .setAuthentication(
-                            authentication
-                        );
-                });
+                        });
             }
         }
+
+        // ---------------------------------------------------------
+        // Continue request
+        // ---------------------------------------------------------
 
         filterChain.doFilter(
                 request,
