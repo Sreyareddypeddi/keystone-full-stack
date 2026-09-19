@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: keystone-postgres
+    environment:
+      POSTGRES_DB: keystone
+      POSTGRES_USER: keystone
+      POSTGRES_PASSWORD: keystone
+    ports:
+      - "5432:5432"
+    volumes:
+      - keystone_pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    container_name: keystone-backend
+    depends_on:
+      - postgres
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/keystone
+      DB_USERNAME: keystone
+      DB_PASSWORD: keystone
+      JWT_SECRET: change-this-development-secret-to-a-long-random-value
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build: ./frontend
+    container_name: keystone-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  keystone_pgdata:
