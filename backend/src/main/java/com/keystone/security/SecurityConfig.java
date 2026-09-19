@@ -7,7 +7,6 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -30,15 +29,11 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfig {
-
-    @Value("${app.frontend-url:http://localhost:5173}")
-    private String frontendUrl;
 
     // =========================================================
     // PASSWORD ENCODER
@@ -60,32 +55,26 @@ public class SecurityConfig {
     ) throws Exception {
 
         http
-            .csrf(c -> c.disable())
+            .csrf(csrf -> csrf.disable())
 
-            // Enable CORS using the configuration below
-            .cors(c -> c.configurationSource(cors()))
+            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
 
-            // JWT based authentication - no server session
-            .sessionManagement(s ->
-                s.sessionCreationPolicy(
+            .sessionManagement(session ->
+                session.sessionCreationPolicy(
                     SessionCreationPolicy.STATELESS
                 )
             )
 
-            .authorizeHttpRequests(a ->
-                a
-                    // -------------------------------------------------
-                    // OPTIONS / CORS PREFLIGHT
-                    // -------------------------------------------------
+            .authorizeHttpRequests(auth ->
+                auth
+                    // Allow browser CORS preflight requests
                     .requestMatchers(
                         org.springframework.http.HttpMethod.OPTIONS,
                         "/**"
                     )
                     .permitAll()
 
-                    // -------------------------------------------------
-                    // PUBLIC ENDPOINTS
-                    // -------------------------------------------------
+                    // Public authentication endpoints
                     .requestMatchers(
                         "/api/auth/**",
                         "/swagger-ui/**",
@@ -94,14 +83,11 @@ public class SecurityConfig {
                     )
                     .permitAll()
 
-                    // -------------------------------------------------
-                    // EVERYTHING ELSE REQUIRES LOGIN
-                    // -------------------------------------------------
+                    // Everything else requires authentication
                     .anyRequest()
                     .authenticated()
             )
 
-            // JWT filter runs before Spring's username/password filter
             .addFilterBefore(
                 filter,
                 UsernamePasswordAuthenticationFilter.class
@@ -111,85 +97,56 @@ public class SecurityConfig {
     }
 
     // =========================================================
-    // CORS CONFIGURATION
+    // CORS
     // =========================================================
 
     @Bean
-    CorsConfigurationSource cors() {
+    CorsConfigurationSource corsConfigurationSource() {
 
-        CorsConfiguration config =
-                new CorsConfiguration();
+        CorsConfiguration config = new CorsConfiguration();
 
-        List<String> allowedOrigins =
-                new ArrayList<>();
-
-        // ---------------------------------------------------------
-        // LOCAL FRONTEND
-        // ---------------------------------------------------------
-
-        allowedOrigins.add(
-                "http://localhost:5173"
+        /*
+         * Accept:
+         * 1. Your Vercel frontend
+         * 2. Other Vercel preview URLs
+         * 3. Local Vite development
+         * 4. Local React development
+         */
+        config.setAllowedOriginPatterns(
+            List.of(
+                "https://*.vercel.app",
+                "http://localhost:*",
+                "http://127.0.0.1:*"
+            )
         );
-
-        allowedOrigins.add(
-                "http://localhost:3000"
-        );
-
-        // ---------------------------------------------------------
-        // DEPLOYED VERCEL FRONTEND
-        // ---------------------------------------------------------
-
-        if (frontendUrl != null &&
-                !frontendUrl.isBlank()) {
-
-            allowedOrigins.add(
-                    frontendUrl.trim()
-            );
-        }
-
-        config.setAllowedOrigins(
-                allowedOrigins
-        );
-
-        // ---------------------------------------------------------
-        // ALLOWED HTTP METHODS
-        // ---------------------------------------------------------
 
         config.setAllowedMethods(
-                List.of(
-                    "GET",
-                    "POST",
-                    "PUT",
-                    "DELETE",
-                    "PATCH",
-                    "OPTIONS"
-                )
+            List.of(
+                "GET",
+                "POST",
+                "PUT",
+                "DELETE",
+                "PATCH",
+                "OPTIONS"
+            )
         );
-
-        // ---------------------------------------------------------
-        // ALLOWED HEADERS
-        // ---------------------------------------------------------
 
         config.setAllowedHeaders(
-                List.of("*")
+            List.of("*")
         );
 
-        // ---------------------------------------------------------
-        // CREDENTIALS
-        // ---------------------------------------------------------
+        config.setExposedHeaders(
+            List.of("Authorization")
+        );
 
         config.setAllowCredentials(true);
 
-        // ---------------------------------------------------------
-        // REGISTER CORS FOR ALL ENDPOINTS
-        // ---------------------------------------------------------
-
         UrlBasedCorsConfigurationSource source =
-                new UrlBasedCorsConfigurationSource();
+            new UrlBasedCorsConfigurationSource();
 
         source.registerCorsConfiguration(
-                "/**",
-                config
+            "/**",
+            config
         );
 
         return source;
@@ -223,74 +180,57 @@ class JwtFilter extends OncePerRequestFilter {
     ) throws ServletException, IOException {
 
         String header =
-                request.getHeader("Authorization");
-
-        // ---------------------------------------------------------
-        // If Authorization header contains a Bearer token
-        // ---------------------------------------------------------
+            request.getHeader("Authorization");
 
         if (header != null &&
                 header.startsWith("Bearer ")) {
 
             String token =
-                    header.substring(7);
-
-            // -----------------------------------------------------
-            // Validate token
-            // -----------------------------------------------------
+                header.substring(7);
 
             if (jwt.valid(token)) {
 
                 String email =
-                        jwt.extractEmail(token);
-
-                // -------------------------------------------------
-                // Find authenticated user
-                // -------------------------------------------------
+                    jwt.extractEmail(token);
 
                 users.findByEmail(email)
-                        .ifPresent(user -> {
+                    .ifPresent(user -> {
 
-                            var authority =
-                                    new org.springframework
-                                        .security
-                                        .core
-                                        .authority
-                                        .SimpleGrantedAuthority(
-                                            "ROLE_" +
-                                            user.getRole()
-                                        );
-
-                            var authentication =
-                                    new org.springframework
-                                        .security
-                                        .authentication
-                                        .UsernamePasswordAuthenticationToken(
-                                            user.getEmail(),
-                                            null,
-                                            List.of(authority)
-                                        );
-
-                            org.springframework
+                        var authority =
+                            new org.springframework
                                 .security
                                 .core
-                                .context
-                                .SecurityContextHolder
-                                .getContext()
-                                .setAuthentication(
-                                    authentication
+                                .authority
+                                .SimpleGrantedAuthority(
+                                    "ROLE_" + user.getRole()
                                 );
-                        });
+
+                        var authentication =
+                            new org.springframework
+                                .security
+                                .authentication
+                                .UsernamePasswordAuthenticationToken(
+                                    user.getEmail(),
+                                    null,
+                                    List.of(authority)
+                                );
+
+                        org.springframework
+                            .security
+                            .core
+                            .context
+                            .SecurityContextHolder
+                            .getContext()
+                            .setAuthentication(
+                                authentication
+                            );
+                    });
             }
         }
 
-        // ---------------------------------------------------------
-        // Continue request
-        // ---------------------------------------------------------
-
         filterChain.doFilter(
-                request,
-                response
+            request,
+            response
         );
     }
 }
